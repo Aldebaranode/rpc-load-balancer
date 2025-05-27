@@ -11,6 +11,7 @@ import (
 // Config holds all configuration settings loaded from the YAML file.
 type Config struct {
 	GatewayPort         string   `yaml:"gatewayPort"`
+	MetricsPort         string   `yaml:"metricsPort"`
 	CheckIntervalStr    string   `yaml:"checkInterval"`
 	RequestTimeoutStr   string   `yaml:"requestTimeout"`
 	RateLimitBackoffStr string   `yaml:"rateLimitBackoff"`
@@ -43,6 +44,9 @@ func LoadConfig(filename string) error {
 	// Set defaults if values are missing
 	if AppConfig.GatewayPort == "" {
 		AppConfig.GatewayPort = ":8545"
+	}
+	if AppConfig.MetricsPort == "" { // <-- Add default
+		AppConfig.MetricsPort = ":9090"
 	}
 	if AppConfig.CheckIntervalStr == "" {
 		AppConfig.CheckIntervalStr = "30s"

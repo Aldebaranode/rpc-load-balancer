@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
+	"strings"
 	"time"
 )
 
@@ -48,5 +50,63 @@ func (gw *Gateway) ProxyHandler() http.Handler {
 		ModifyResponse: modifyResponse,
 		ErrorHandler:   errorHandler,
 	}
-	return proxy
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startTime := time.Now()
+
+		ip := getRequestIP(r)
+		// Log the request details including IP
+		log.Printf("📥 [%s] Received request: %s %s", ip, r.Method, r.URL.String())
+
+		lrw := NewLoggingResponseWriter(w)
+
+		proxy.ServeHTTP(w, r)
+
+		duration := time.Since(startTime)
+
+		// Log the completion details including status and duration
+		log.Printf("📤 [%s] <-- %s %s - Status %d (%v)", ip, r.Method, r.URL.String(), lrw.statusCode, duration)
+	})
+}
+
+func getRequestIP(r *http.Request) string {
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded != "" {
+		ips := strings.Split(forwarded, ",")
+		return strings.TrimSpace(ips[0])
+	}
+	realIP := r.Header.Get("X-Real-IP")
+	if realIP != "" {
+		return realIP
+	}
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr // Fallback
+	}
+	return ip
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+// NewLoggingResponseWriter creates a new loggingResponseWriter.
+func NewLoggingResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
+	// Default status code is 200 (OK) if WriteHeader is never called.
+	return &loggingResponseWriter{w, http.StatusOK}
+}
+
+// WriteHeader captures the status code before calling the original WriteHeader.
+func (lrw *loggingResponseWriter) WriteHeader(code int) {
+	lrw.statusCode = code
+	lrw.ResponseWriter.WriteHeader(code)
+}
+
+// Write calls the original Write but ensures WriteHeader(200) is called
+// if it hasn't been called yet (Go's default behavior).
+func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
+	// If WriteHeader has not been called, Write will call WriteHeader(http.StatusOK)
+	// We don't need to explicitly capture it here as WriteHeader handles it.
+	return lrw.ResponseWriter.Write(b)
 }

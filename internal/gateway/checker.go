@@ -8,6 +8,7 @@ import (
 	"log"
 	"math/big"
 	"net/http"
+	"rpc-load-balancer/internal/metrics"
 	"rpc-load-balancer/internal/types"
 	"sort"
 	"sync"
@@ -19,83 +20,106 @@ func (gw *Gateway) CheckEndpointStatus(ep *types.RpcEndpoint) {
 	ep.Mutex.Lock()
 	defer ep.Mutex.Unlock()
 
+	endpointURL := ep.URL.String() // Get URL for labels
+
 	now := time.Now()
 	if ep.IsRateLimited && now.Before(ep.RateLimitedUntil) {
 		ep.IsReachable = false
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 	if ep.IsRateLimited && now.After(ep.RateLimitedUntil) {
-		log.Printf("Retrying %s (Backoff Ended)", ep.URL.String())
+		log.Printf("Retrying %s (Backoff Ended)", endpointURL)
 		ep.IsRateLimited = false
 	}
 
 	startTime := time.Now()
 	reqPayload := types.EthBlockNumberRequest{Jsonrpc: "2.0", Method: "eth_blockNumber", Params: []interface{}{}, ID: 1}
 	payloadBytes, _ := json.Marshal(reqPayload)
-	req, err := http.NewRequest("POST", ep.URL.String(), bytes.NewBuffer(payloadBytes))
+	req, err := http.NewRequest("POST", endpointURL, bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		log.Printf("Error creating request for %s: %v", ep.URL.String(), err)
+		log.Printf("Error creating request for %s: %v", endpointURL, err)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "request_creation").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := gw.client.Do(req) // gw.client already uses config timeout
+	resp, err := gw.client.Do(req)
 	latency := time.Since(startTime)
+	metrics.RpcCheckDuration.WithLabelValues(endpointURL).Observe(latency.Seconds()) // <-- Observe duration
 
 	if err != nil {
-		log.Printf("Error checking %s: %v", ep.URL.String(), err)
+		log.Printf("Error checking %s: %v", endpointURL, err)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "http_do").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 	defer resp.Body.Close()
 
 	ep.Latency = latency
+	metrics.RpcEndpointLatency.WithLabelValues(endpointURL).Set(latency.Seconds()) // <-- Set latency gauge
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		log.Printf("🚦 Rate limit detected for %s", ep.URL.String())
+		log.Printf("🚦 Rate limit detected for %s", endpointURL)
 		ep.IsRateLimited = true
-		ep.RateLimitedUntil = now.Add(gw.config.RateLimitBackoff) // Use config
+		ep.RateLimitedUntil = now.Add(gw.config.RateLimitBackoff)
 		ep.IsReachable = false
+		metrics.RpcRateLimitsTotal.WithLabelValues(endpointURL, "check").Inc() // <-- Inc rate limit
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("HTTP Error %d from %s", resp.StatusCode, ep.URL.String())
+		log.Printf("HTTP Error %d from %s", resp.StatusCode, endpointURL)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "http_status").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		log.Printf("Error reading response from %s: %v", ep.URL.String(), err)
+		log.Printf("Error reading response from %s: %v", endpointURL, err)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "read_body").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	var rpcResp types.EthBlockNumberResponse
 	if err := json.Unmarshal(body, &rpcResp); err != nil {
-		log.Printf("Error parsing JSON from %s: %v", ep.URL.String(), err)
+		log.Printf("Error parsing JSON from %s: %v", endpointURL, err)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "json_parse").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	if rpcResp.Error != nil {
-		log.Printf("RPC Error from %s: %s (%d)", ep.URL.String(), rpcResp.Error.Message, rpcResp.Error.Code)
+		log.Printf("RPC Error from %s: %s (%d)", endpointURL, rpcResp.Error.Message, rpcResp.Error.Code)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "rpc_error").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	blockNumBig := new(big.Int)
 	_, success := blockNumBig.SetString(rpcResp.Result, 0)
 	if !success {
-		log.Printf("Error parsing block number '%s' from %s", rpcResp.Result, ep.URL.String())
+		log.Printf("Error parsing block number '%s' from %s", rpcResp.Result, endpointURL)
 		ep.IsReachable = false
+		metrics.RpcCheckErrorsTotal.WithLabelValues(endpointURL, "block_parse").Inc()
+		metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(0)
 		return
 	}
 
 	ep.BlockNumber = blockNumBig.Int64()
 	ep.IsReachable = true
+	metrics.RpcEndpointBlockNumber.WithLabelValues(endpointURL).Set(float64(ep.BlockNumber)) // <-- Set block gauge
+	metrics.RpcEndpointIsActive.WithLabelValues(endpointURL).Set(1)                          // <-- Set active gauge
 }
 
 // SelectBestEndpoint uses gw.config.BlockTolerance.
@@ -158,17 +182,30 @@ func (gw *Gateway) SelectBestEndpoint() {
 
 	best := finalCandidates[0]
 	best.Mutex.RLock()
-	currentURL := gw.GetBestEndpoint().URL.String()
+	currentBestURL := gw.GetBestEndpoint().URL.String()
 	bestURL := best.URL.String()
 	bestBlock := best.BlockNumber
 	bestLatency := best.Latency
 	best.Mutex.RUnlock()
 
-	if currentURL != bestURL {
+	if currentBestURL != bestURL {
 		log.Printf("✅ New best endpoint: %s (Block: %d, Latency: %v)", bestURL, bestBlock, bestLatency)
 		gw.setBestEndpoint(best)
+		// Update metrics: Set old best to 0, new best to 1
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(currentBestURL).Set(0)
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(1)
 	} else {
 		log.Printf("👍 Best endpoint remains: %s (Block: %d, Latency: %v)", bestURL, bestBlock, bestLatency)
+		// Ensure it's set to 1
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(1)
+	}
+
+	// Ensure all *other* endpoints are set to 0
+	for _, ep := range gw.Endpoints {
+		epURL := ep.URL.String()
+		if epURL != bestURL {
+			metrics.RpcEndpointIsCurrentBest.WithLabelValues(epURL).Set(0)
+		}
 	}
 }
 

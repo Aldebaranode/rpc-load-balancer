@@ -1,5 +1,7 @@
 # Port for the gateway to listen on (e.g., ":8545")
 gatewayPort: ":8545"
+# Port for the metrics to listen on (e.g., ":9090")
+metricsPort: ":9090"
 # How often to check node status (e.g., "30s", "1m", "500ms")
 checkInterval: "10s"
 # Max time to wait for an RPC node response during checks (e.g., "5s")

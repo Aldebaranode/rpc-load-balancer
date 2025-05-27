@@ -16,7 +16,7 @@ import (
 const configFilename = "config.yaml"
 
 func main() {
-	log.Println("Starting Go Ethereum RPC Gateway...")
+	log.Println("Starting RPC Gateway...")
 
 	// Load configuration from YAML file
 	if err := config.LoadConfig(configFilename); err != nil {
