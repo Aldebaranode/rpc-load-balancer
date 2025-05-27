@@ -1,0 +1,13 @@
+# Port for the gateway to listen on (e.g., ":8545")
+gatewayPort: ":8545"
+# How often to check node status (e.g., "30s", "1m", "500ms")
+checkInterval: "10s"
+# Max time to wait for an RPC node response during checks (e.g., "5s")
+requestTimeout: "1s"
+# How many blocks behind the highest an endpoint can be
+blockTolerance: 1
+# How long to wait before retrying a rate-limited node (e.g., "1m", "90s")
+rateLimitBackoff: "1m"
+# List of upstream RPC nodes.
+rpcEndpoints:
+  - "https://l3-stage.cortensor.network/"
