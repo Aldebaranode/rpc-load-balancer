@@ -152,6 +152,13 @@ func (gw *Gateway) SelectBestEndpoint() {
 
 	if len(candidates) == 0 {
 		log.Println("⚠️ No reachable, non-rate-limited endpoints found. Keeping current best.")
+		for _, ep := range gw.Endpoints {
+			metrics.RpcEndpointIsCurrentBest.WithLabelValues(ep.URL.String()).Set(metrics.RpcEndpointCurrentBestNotActive)
+			// Check verbose before logging
+			if gw.config.Verbose {
+				log.Printf("📊 METRIC: RpcEndpointIsCurrentBest{endpoint=\"%s\"} set to %v (No candidates)", ep.URL.String(), metrics.RpcEndpointCurrentBestNotActive)
+			}
+		}
 		return
 	}
 
@@ -192,21 +199,35 @@ func (gw *Gateway) SelectBestEndpoint() {
 		log.Printf("✅ New best endpoint: %s (Block: %d, Latency: %v)", bestURL, bestBlock, bestLatency)
 		gw.setBestEndpoint(best)
 		// Update metrics: Set old best to 0, new best to 1
-		metrics.RpcEndpointIsCurrentBest.WithLabelValues(currentBestURL).Set(0)
-		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(1)
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(currentBestURL).Set(metrics.RpcEndpointCurrentBestNotActive)
+		if gw.config.Verbose { // <-- Check verbose
+			log.Printf("📊 METRIC: RpcEndpointIsCurrentBest{endpoint=\"%s\"} set to %v", currentBestURL, metrics.RpcEndpointCurrentBestNotActive)
+		}
+
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(metrics.RpcEndpointCurrentBestActive)
+		if gw.config.Verbose { // <-- Check verbose
+			log.Printf("📊 METRIC: RpcEndpointIsCurrentBest{endpoint=\"%s\"} set to %v", bestURL, metrics.RpcEndpointCurrentBestActive)
+		}
 	} else {
 		log.Printf("👍 Best endpoint remains: %s (Block: %d, Latency: %v)", bestURL, bestBlock, bestLatency)
 		// Ensure it's set to 1
-		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(1)
+		metrics.RpcEndpointIsCurrentBest.WithLabelValues(bestURL).Set(metrics.RpcEndpointCurrentBestActive)
+		if gw.config.Verbose { // <-- Check verbose
+			log.Printf("📊 METRIC: RpcEndpointIsCurrentBest{endpoint=\"%s\"} set to %v (reaffirmed)", bestURL, metrics.RpcEndpointCurrentBestActive)
+		}
 	}
 
 	// Ensure all *other* endpoints are set to 0
 	for _, ep := range gw.Endpoints {
 		epURL := ep.URL.String()
 		if epURL != bestURL {
-			metrics.RpcEndpointIsCurrentBest.WithLabelValues(epURL).Set(0)
+			metrics.RpcEndpointIsCurrentBest.WithLabelValues(epURL).Set(metrics.RpcEndpointCurrentBestNotActive)
+			if gw.config.Verbose { // <-- Check verbose
+				log.Printf("📊 METRIC: RpcEndpointIsCurrentBest{endpoint=\"%s\"} set to %v (not best)", epURL, metrics.RpcEndpointCurrentBestNotActive)
+			}
 		}
 	}
+
 }
 
 // StartChecker uses gw.config.CheckInterval.

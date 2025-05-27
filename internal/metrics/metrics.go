@@ -63,6 +63,9 @@ var (
 	}, []string{"endpoint"})
 )
 
+var RpcEndpointCurrentBestActive float64 = 1
+var RpcEndpointCurrentBestNotActive float64 = 0
+
 // InitMetrics - We don't strictly need an Init function when using promauto,
 // as metrics are registered on creation. This is kept for conceptual clarity
 // or if we switch from promauto later.

@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"rpc-load-balancer/internal/config"
 	"rpc-load-balancer/internal/gateway"
+	"rpc-load-balancer/internal/metrics"
 	"syscall"
 	"time"
 )
@@ -42,11 +43,25 @@ func main() {
 		Handler: gw.ProxyHandler(),
 	}
 
+	// Setup the metrics server (runs on a different port)
+	metricsServer := &http.Server{
+		Addr:    config.AppConfig.MetricsPort,
+		Handler: metrics.MetricsHandler(), // Use the metrics mux
+	}
+
 	// Start server in a goroutine
 	go func() {
 		log.Printf("🚀 Gateway listening on http://localhost%s", config.AppConfig.GatewayPort)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("Fatal: Server failed to start: %v", err)
+		}
+	}()
+
+	// Start metrics server
+	go func() {
+		log.Printf("📊 Metrics listening on http://localhost%s/metrics", config.AppConfig.MetricsPort)
+		if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Fatal: Metrics Server failed: %v", err)
 		}
 	}()
 

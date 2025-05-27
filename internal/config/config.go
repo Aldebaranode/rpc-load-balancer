@@ -17,6 +17,7 @@ type Config struct {
 	RateLimitBackoffStr string   `yaml:"rateLimitBackoff"`
 	BlockTolerance      int64    `yaml:"blockTolerance"`
 	RpcEndpoints        []string `yaml:"rpcEndpoints"`
+	Verbose             bool     `yaml:"verbose"`
 
 	// Parsed values - marked with `yaml:"-"` to be ignored by the parser.
 	CheckInterval    time.Duration `yaml:"-"`

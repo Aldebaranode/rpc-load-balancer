@@ -2,10 +2,11 @@ package gateway
 
 import (
 	"log"
-	"net"
 	"net/http"
 	"net/http/httputil"
-	"strings"
+	"rpc-load-balancer/internal/metrics"
+	"rpc-load-balancer/internal/utils"
+	"strconv"
 	"time"
 )
 
@@ -28,12 +29,15 @@ func (gw *Gateway) ProxyHandler() http.Handler {
 	modifyResponse := func(resp *http.Response) error {
 		if resp.StatusCode == http.StatusTooManyRequests {
 			best := gw.GetBestEndpoint()
-			log.Printf("🚦 Rate limit detected during forward to %s", best.URL.String())
+			endpointURL := best.URL.String()
+			log.Printf("🚦 Rate limit detected during forward to %s", endpointURL)
 
 			best.Mutex.Lock()
 			best.IsRateLimited = true
-			best.RateLimitedUntil = time.Now().Add(gw.config.RateLimitBackoff) // Use config
+			best.RateLimitedUntil = time.Now().Add(gw.config.RateLimitBackoff)
 			best.Mutex.Unlock()
+
+			metrics.RpcRateLimitsTotal.WithLabelValues(endpointURL, "proxy").Inc() // <-- Inc rate limit
 
 			go gw.SelectBestEndpoint()
 		}
@@ -45,7 +49,7 @@ func (gw *Gateway) ProxyHandler() http.Handler {
 		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 	}
 
-	proxy := &httputil.ReverseProxy{
+	proxyHandler := &httputil.ReverseProxy{
 		Director:       director,
 		ModifyResponse: modifyResponse,
 		ErrorHandler:   errorHandler,
@@ -53,60 +57,23 @@ func (gw *Gateway) ProxyHandler() http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
+		ip := utils.GetRequestIP(r)
+		lrw := utils.NewLoggingResponseWriter(w)
 
-		ip := getRequestIP(r)
-		// Log the request details including IP
-		log.Printf("📥 [%s] Received request: %s %s", ip, r.Method, r.URL.String())
+		// Get endpoint *before* proxying (best guess)
+		currentEndpoint := gw.GetBestEndpoint().URL.String()
 
-		lrw := NewLoggingResponseWriter(w)
+		log.Printf("📥 [%s] --> %s %s (to %s)", ip, r.Method, r.URL.String(), currentEndpoint)
 
-		proxy.ServeHTTP(w, r)
+		proxyHandler.ServeHTTP(lrw, r) // Use our proxy
 
 		duration := time.Since(startTime)
+		statusCodeStr := strconv.Itoa(lrw.StatusCode)
 
-		// Log the completion details including status and duration
-		log.Printf("📤 [%s] <-- %s %s - Status %d (%v)", ip, r.Method, r.URL.String(), lrw.statusCode, duration)
+		// Update Prometheus Metrics
+		metrics.HttpRequestDuration.WithLabelValues(r.Method, statusCodeStr, currentEndpoint).Observe(duration.Seconds())
+		metrics.HttpRequestTotal.WithLabelValues(r.Method, statusCodeStr, currentEndpoint).Inc()
+
+		log.Printf("📤 [%s] <-- %s %s - Status %d (%v)", ip, r.Method, r.URL.String(), lrw.StatusCode, duration)
 	})
-}
-
-func getRequestIP(r *http.Request) string {
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded != "" {
-		ips := strings.Split(forwarded, ",")
-		return strings.TrimSpace(ips[0])
-	}
-	realIP := r.Header.Get("X-Real-IP")
-	if realIP != "" {
-		return realIP
-	}
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr // Fallback
-	}
-	return ip
-}
-
-type loggingResponseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-// NewLoggingResponseWriter creates a new loggingResponseWriter.
-func NewLoggingResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
-	// Default status code is 200 (OK) if WriteHeader is never called.
-	return &loggingResponseWriter{w, http.StatusOK}
-}
-
-// WriteHeader captures the status code before calling the original WriteHeader.
-func (lrw *loggingResponseWriter) WriteHeader(code int) {
-	lrw.statusCode = code
-	lrw.ResponseWriter.WriteHeader(code)
-}
-
-// Write calls the original Write but ensures WriteHeader(200) is called
-// if it hasn't been called yet (Go's default behavior).
-func (lrw *loggingResponseWriter) Write(b []byte) (int, error) {
-	// If WriteHeader has not been called, Write will call WriteHeader(http.StatusOK)
-	// We don't need to explicitly capture it here as WriteHeader handles it.
-	return lrw.ResponseWriter.Write(b)
 }
