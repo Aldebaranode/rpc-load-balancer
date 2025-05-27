@@ -1,122 +1,83 @@
 # RPC Load Balancer
 
-A high-performance, intelligent load balancer for Ethereum-compatible RPC nodes, written in Go. This gateway forwards your JSON-RPC requests to the healthiest and most performant node available, improving the reliability and speed of your dApp or service interactions.
+A simple yet effective load balancer for Ethereum-compatible RPC nodes, built with Go. It directs your requests to the best-performing node, making your DApp or service more reliable.
 
 ## Features
 
-* **Multiple Upstream Support:** Configure and manage a pool of several RPC endpoints.
-* **Intelligent Health Checking:** Periodically checks each node for:
-    * **Latency:** Measures the response time.
-    * **Block Height:** Determines how up-to-date the node is.
-* **Best Node Selection:** Routes traffic based on:
-    * The lowest latency.
-    * Nodes within an acceptable block height tolerance (`BlockTolerance`) compared to the highest available block.
-* **Rate Limit Handling:** Detects `HTTP 429 (Too Many Requests)` responses and temporarily backs off from the affected node to avoid hammering it.
-* **YAML Configuration:** Easily configure endpoints and parameters through a simple `config.yaml` file.
-* **Efficient Reverse Proxy:** Uses Go's standard library for efficient request forwarding.
-* **Graceful Shutdown:** Handles `SIGINT` and `SIGTERM` signals to shut down cleanly, allowing in-flight requests to complete.
+* **Multi-Node Support:** Use multiple RPC endpoints.
+* **Health Checks:** Picks nodes with low latency and recent block numbers.
+* **Rate Limit Aware:** Avoids nodes that are temporarily rate-limited (HTTP 429).
+* **Configurable:** Uses a simple `config.yaml` file.
+* **Metrics:** Provides Prometheus metrics for monitoring.
+* **Docker Ready:** Easy to run with Docker and `docker-compose`.
 
-## How it Works
+## Quick Start (Docker Compose)
 
-1.  **Startup:** The gateway reads its configuration from `config.yaml`, initializes a pool of RPC endpoints, and starts an HTTP server.
-2.  **Periodic Checks:** A background goroutine runs at a configured interval (`checkInterval`). It concurrently sends an `eth_blockNumber` request to every non-rate-limited node.
-3.  **Selection:** It gathers latency and block number data from the checks. It filters out nodes that are too far behind the highest block (`blockTolerance`) and then selects the node with the lowest latency from the remaining candidates. This node becomes the `CurrentBest`.
-4.  **Request Handling:** When the gateway receives an incoming JSON-RPC request:
-    * It consults the `CurrentBest` node.
-    * It forwards the request to that node using a reverse proxy.
-    * It monitors the response. If a `429` is detected, it marks that node as rate-limited for a configurable period (`rateLimitBackoff`).
-    * It returns the response to the client.
+This is the recommended way to run the gateway.
 
-## Prerequisites
+**Prerequisites:**
 
-* **Go:** Version 1.21 or higher is recommended. You can download it from [golang.org](https://golang.org/).
+* Docker & Docker Compose installed.
 
-## Configuration
+**Steps:**
 
-Before running, create a `config.yaml` file in the same directory as the executable. You can start with `config-example.yaml` and modify it:
-
-```yaml
-# config.yaml - Configuration for the Go Ethereum RPC Gateway
-
-# Port for the gateway to listen on (e.g., ":8545")
-gatewayPort: ":8545"
-
-# How often to check node status (e.g., "30s", "1m", "500ms")
-checkInterval: "30s"
-
-# Max time to wait for an RPC node response during checks (e.g., "5s")
-requestTimeout: "5s"
-
-# How many blocks behind the highest an endpoint can be
-blockTolerance: 5
-
-# How long to wait before retrying a rate-limited node (e.g., "1m", "90s")
-rateLimitBackoff: "1m"
-
-# List of upstream Ethereum RPC nodes.
-# IMPORTANT: Replace placeholders with your actual keys/IDs.
-rpcEndpoints:
-  - "https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID"
-  - "https://rpc.ankr.com/eth"
-  - "https://eth-mainnet.alchemyapi.io/v2/YOUR_ALCHEMY_API_KEY"
-  - "https://cloudflare-eth.com"
-  # Add more endpoints here
-```
-
-**Make sure to replace the placeholder API keys/Project IDs with your actual ones.**
-
-## Installation & Setup
-
-1.  **Clone the Repository (or setup files):**
-    ```bash
-    git clone <repository_url> # Or just place the .go files in a directory
-    cd rpc-load-balancer
+1.  **Clone / Download:** Get the project files.
+2.  **Create `config.yaml`:** Copy `config-example.yaml` to `config.yaml` and **edit it**:
+    * **Add your RPC endpoints** with API keys/project IDs.
+    * (Optional) Adjust ports and intervals.
+    ```yaml
+    # config.yaml
+    gatewayPort: ":8545"
+    metricsPort: ":9090"
+    checkInterval: "30s"
+    requestTimeout: "5s"
+    blockTolerance: 5
+    rateLimitBackoff: "1m"
+    rpcEndpoints:
+      - "https://YOUR_RPC_ENDPOINT_1"
+      - "https://YOUR_RPC_ENDPOINT_2"
     ```
-2.  **Initialize Go Module:**
-    If you cloned, it might already exist. If not, or if you created files manually:
-    ```bash
-    go mod init rpc-load-balancer # Or your preferred module path
+3.  **Create `docker-compose.yaml`:**
+    ```yaml
+    # docker-compose.yaml
+    version: '3.8'
+    services:
+      rpc-gateway:
+        build: . # Assumes Dockerfile exists in the current directory
+        container_name: rpc-gateway
+        restart: unless-stopped
+        volumes:
+          # Mount your local config.yaml into the container
+          - ./config.yaml:/app/config.yaml
+        ports:
+          - "8545:8545" # Gateway port
+          - "9191:9090" # Metrics port (mapped to avoid host conflict)
     ```
-3.  **Get Dependencies:**
-    This command will download the `yaml.v3` library and update your `go.mod` and `go.sum` files.
+4.  **Run:**
     ```bash
-    go mod tidy
+    docker-compose up -d
     ```
-4.  **Configure:**
-    Create or edit your `config.yaml` as described above.
+5.  **Use:**
+    * Send RPC requests to `http://localhost:8545`.
+    * View metrics at `http://localhost:9191/metrics`.
+6.  **Stop:**
+    ```bash
+    docker-compose down
+    ```
 
-## Usage
+## Local Usage (Without Docker)
 
-### Running Directly
+**Prerequisites:**
 
-You can run the gateway directly from the source code:
+* Go (1.21+) installed.
 
-```bash
-go run .
-```
+**Steps:**
 
-### Building an Executable
-
-For production use or easier distribution, build a binary:
-
-```bash
-go build -o rpc-gateway .
-```
-
-Then run the executable:
-
-```bash
-./rpc-gateway
-```
-
-### Using the Gateway
-
-Once running, the gateway will listen on the port specified in `config.yaml` (default: `:8545`). Point your dApp, wallet, or script's RPC endpoint to `http://localhost:8545` (or `http://<your_server_ip>:8545`). The gateway will handle routing your requests to the best upstream node.
-
-## Contributing
-
-Contributions are welcome! Please feel free to open an issue or submit a pull request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file (if available) for details.
+1.  **Clone / Download:** Get the project files.
+2.  **Navigate:** `cd rpc-load-balancer`
+3.  **Setup Go Module:** `go mod init rpc-load-balancer && go mod tidy`
+4.  **Configure:** Create and edit `config.yaml` as shown above.
+5.  **Run:** `go run .`
+6.  **Use:**
+    * Gateway: `http://localhost:8545`
+    * Metrics: `http://localhost:9090/metrics`
